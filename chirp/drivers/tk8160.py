@@ -799,6 +799,7 @@ class TK7162Radio(TKx160Radio):
         m.name = str(_mem.name).rstrip()
         m.power = _POWER_LEVELS_7162[_mem.highpower]
         m.mode = 'NFM' if _mem.wide == 1 else 'FM'
+        m.skip = '' if _mem.scanadd else 'S'
 
         return m
 
@@ -815,7 +816,6 @@ class TK7162Radio(TKx160Radio):
 
         _mem = self._memobj.memories[slot]
         _mem.number = mem.number
-        _mem.name = mem.name[:8].ljust(8)
         _mem.zone = self._zone
 
         LOG.debug('Setting memory %i in slot %i', mem.number, slot)
@@ -838,8 +838,33 @@ class TK7162Radio(TKx160Radio):
         _mem.rxtone = tk8180.KenwoodTKx180Radio._encode_tone(*rxtone)
         _mem.txtone = tk8180.KenwoodTKx180Radio._encode_tone(*txtone)
 
-        _mem.wide = 1 if mem.mode == 'NFM' else 2  # FM always 5k
+        _mem.wide = mem.mode == 'FM'
         _mem.highpower = str(mem.power) == 'High'
+        _mem.scanadd = mem.skip == ''
+        _mem.name = mem.name[:8].ljust(8)
+
+        # Set the flags we don't support
+        _mem.bcl = 0
+        _mem.beatshift = 0
+        _mem.pttid = 0
+        _mem.compander = 0
+        _mem.pttidmute = 0
+        _mem.optsig = 0
+
+        # Set the unknowns
+        _mem.unknown1[0] = 0x02
+        _mem.unknown1[1] = 0x02
+        _mem.unknown2_0 = 0x0F
+        _mem.unknown2_01 = 0x00
+        _mem.unknown2_1 = 0x00
+        _mem.unknown2_2 = 0x00
+        _mem.unknown2_3 = 0x00
+        _mem.unknown3_0 = 0x00
+        _mem.unknown3_1 = 0x00
+        _mem.unknown4 = 0x1F
+        _mem.unknown5[0] = 0xFF
+        _mem.unknown5[1] = 0xFF
+
 
     def get_settings(self) -> settings.RadioSettings:
         _settings = self._memobj.settings
@@ -852,7 +877,6 @@ class TK7162Radio(TKx160Radio):
         }
 
         for desc, name in KEY_NAMES.items():
-
             # radio_idx -> key_name -> sel_idx
             current_value = int(getattr(_keys, name))
             current_index = SEL_ID_LOOKUP[KEYS_7162[current_value]]
