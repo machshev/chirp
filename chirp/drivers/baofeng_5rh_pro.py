@@ -26,10 +26,17 @@ from chirp import memmap
 from chirp.settings import (
     RadioSettings, RadioSettingGroup, RadioSetting, MemSetting,
     RadioSettingValueList, RadioSettingValueBoolean, RadioSettingValueString,
-    RadioSettingValueMap,
+    RadioSettingValueMap, RadioSettingValueInteger,
 )
 
 LOG = logging.getLogger(__name__)
+
+# Callsigns are upper-case alphanumeric; the trailing space is what pads a
+# short one out to the six bytes the field holds.
+APRS_CHARSET = chirp_common.CHARSET_UPPER_NUMERIC
+# Symbol table and code are single printable characters ("/" and "#" ship as
+# the default pair), so the full ASCII range applies.
+APRS_SYMBOL_CHARSET = chirp_common.CHARSET_ASCII
 
 # The radio XORs the whole session after the sync header with the key it is
 # given in the last byte of that header. It accepts any key, so use zero:
@@ -198,6 +205,11 @@ def _encode_name(name, length=16):
     except UnicodeEncodeError:
         nb = name.encode('ascii', errors='ignore')
     return nb[:length].ljust(length, b'\x00')
+
+
+def _decode_call(raw):
+    """Decode a space-padded APRS callsign field."""
+    return str(raw).rstrip(' \x00\xff').upper()
 
 
 def _announce(radio):
@@ -503,6 +515,29 @@ struct {
 
 #seekto 0x81A0;
 lbit chn_unscanned[640];
+
+// APRS. The block is a run of 8-byte call records: six characters of
+// callsign padded with spaces, an SSID, and a flag byte. "WIDE1" with SSID
+// 1 in the first path slot is what fixes that layout - it is the standard
+// WIDE1-1 path every CPS writes there.
+#seekto 0x9E00;
+struct {
+  char dest[6];        // 0   tocall, "APAT81" as shipped
+  u8 dest_ssid;        // 6
+  u8 dest_flag;        // 7
+  char callsign[6];    // 8   own callsign, space padded
+  u8 ssid;             // 14
+  u8 unknown_0f;       // 15  differs between radios, purpose unknown
+  u8 unknown_10[4];    // 16
+  char symbol_table;   // 20  "/" for the primary APRS symbol table
+  char symbol_code;    // 21
+  u8 unknown_16[2];    // 22
+  struct {
+    char call[6];
+    u8 ssid;
+    u8 flag;
+  } path[8];           // 24  digipeater path, blank slots are all spaces
+} aprs;
 
 #seekto 0x7980;
 struct {
@@ -886,7 +921,60 @@ class Baofeng5RHPro(chirp_common.CloneModeRadio):
         basic.append(RadioSetting("radio_name", "Radio name",
                                   RadioSettingValueString(0, 16, cur_name)))
 
-        return RadioSettings(basic)
+        return RadioSettings(basic, self._get_aprs_settings())
+
+    def _get_aprs_settings(self):
+        """Build the APRS group.
+
+        Only the fields confirmed by comparing images from two different
+        radios are exposed. The block holds more - a pair of dword timers at
+        0x9E58 and a table of frequencies at 0x9EAC - but nothing observed so
+        far pins down what they mean, so they are left alone rather than
+        offered under a guessed name.
+        """
+        _s = self._memobj.settings
+        _a = self._memobj.aprs
+        aprs = RadioSettingGroup("aprs", "APRS")
+
+        aprs.append(MemSetting(
+            "settings.aprssw", "APRS enable",
+            RadioSettingValueBoolean(bool(int(_s.aprssw)))))
+
+        # MemSetting pads a string out to maxlength with mem_pad_char, which
+        # defaults to a space - exactly how the CPS stores these fields.
+        aprs.append(MemSetting(
+            "aprs.callsign", "My callsign",
+            RadioSettingValueString(0, 6, _decode_call(_a.callsign),
+                                    charset=APRS_CHARSET)))
+        aprs.append(MemSetting(
+            "aprs.ssid", "My SSID",
+            RadioSettingValueInteger(0, 15, int(_a.ssid))))
+
+        aprs.append(MemSetting(
+            "aprs.dest", "Destination (tocall)",
+            RadioSettingValueString(0, 6, _decode_call(_a.dest),
+                                    charset=APRS_CHARSET)))
+
+        aprs.append(MemSetting(
+            "aprs.symbol_table", "Symbol table",
+            RadioSettingValueString(1, 1, str(_a.symbol_table),
+                                    charset=APRS_SYMBOL_CHARSET)))
+        aprs.append(MemSetting(
+            "aprs.symbol_code", "Symbol code",
+            RadioSettingValueString(1, 1, str(_a.symbol_code),
+                                    charset=APRS_SYMBOL_CHARSET)))
+
+        for i in range(8):
+            entry = _a.path[i]
+            aprs.append(MemSetting(
+                "aprs.path[%i].call" % i, "Path %i callsign" % (i + 1),
+                RadioSettingValueString(0, 6, _decode_call(entry.call),
+                                        charset=APRS_CHARSET)))
+            aprs.append(MemSetting(
+                "aprs.path[%i].ssid" % i, "Path %i SSID" % (i + 1),
+                RadioSettingValueInteger(0, 15, int(entry.ssid))))
+
+        return aprs
 
     def set_settings(self, settings):
         for element in settings:
