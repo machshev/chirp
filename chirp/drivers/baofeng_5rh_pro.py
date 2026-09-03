@@ -1053,6 +1053,13 @@ class BaofengUV5RHPlus(Baofeng5RHPro):
 
 
 @directory.register
+class BaofengRD55Pro(Baofeng5RHPro):
+    # Sold under this name on the online marketplaces. The radio still
+    # reports "BF-5RH" in the clone handshake and the image is identical.
+    MODEL = "RD-55 Pro"
+
+
+@directory.register
 class BaofengUV5RMPlusV2(Baofeng5RHPro):
     # baofeng_uv17Pro.py already registers "UV-5RM Plus" for the older
     # firmware, so the generation goes in VARIANT to keep the two apart.
